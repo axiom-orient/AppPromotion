@@ -1,4 +1,4 @@
-#if os(iOS)
+#if canImport(SwiftUI)
 import AppPromotion
 import Foundation
 import SwiftUI
@@ -24,6 +24,13 @@ public struct PromotionCardView: View {
             self.accent = accent; self.title = title; self.body = body; self.caption = caption
             self.inset = inset; self.radius = radius
         }
+
+        public static var standard: Self {
+            Self(ink: .primary, secondaryInk: .secondary, surface: .secondary.opacity(0.08),
+                 rule: .secondary.opacity(0.15), accent: .accentColor,
+                 title: .headline, body: .subheadline, caption: .caption,
+                 inset: 16, radius: 16)
+        }
     }
 
     /// A live placement requires both explicit open and information/report entry actions.
@@ -40,7 +47,9 @@ public struct PromotionCardView: View {
 
     public init(card: PromotionCard, language: String, style: Style,
                 presentation: Presentation, icon: Image? = nil) {
-        self.card = card; self.language = language; self.style = style
+        self.card = card
+        self.language = Locale(identifier: language).language.languageCode?.identifier ?? "en"
+        self.style = style
         self.presentation = presentation; self.icon = icon
     }
 
@@ -66,7 +75,7 @@ public struct PromotionCardView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             if case let .advertisement(open, about) = presentation {
                 VStack(spacing: 0) {
-                    if card.appStoreURL != nil {
+                    if card.destinationURL != nil {
                         Button { open(card) } label: {
                             Text(verbatim: actionTitle)
                                 .font(style.caption.weight(.semibold))
@@ -74,7 +83,7 @@ public struct PromotionCardView: View {
                         }
                         .foregroundStyle(style.accent)
                         .accessibilityLabel(Text(verbatim: card.title
-                            + ", " + storeActionDescription))
+                            + ", " + actionDescription))
                     }
                     Button { about(card) } label: {
                         Image(systemName: "ellipsis").frame(minWidth: 44, minHeight: 44)
@@ -113,11 +122,14 @@ public struct PromotionCardView: View {
         }
     }
 
-    private var storeActionDescription: String {
-        switch language {
-        case "ko": "App Store에서 보기"
-        case "ja": "App Storeで見る"
-        default: "view on the App Store"
+    private var actionDescription: String {
+        switch (card.destination?.isAppStore == true, language) {
+        case (true, "ko"): "App Store에서 보기"
+        case (true, "ja"): "App Storeで見る"
+        case (true, _): "view on the App Store"
+        case (false, "ko"): "웹사이트 열기"
+        case (false, "ja"): "ウェブサイトを開く"
+        case (false, _): "open website"
         }
     }
 

@@ -1,34 +1,19 @@
 # AppPromotion
 
-A small Swift package for promoting your own apps and approved partner apps. Serve one public JSON catalog from Cloudflare, Firebase Hosting, or another HTTPS static host. No advertising network SDK, account, cookies, device identifiers, impression events, or click tracking is included.
+One small native ad card, supplied by a public HTTPS JSON catalog. Promote your own apps or approved partners with a web, Universal Link or App Store destination. No advertising network SDK, account, device identifier, impression event or click-tracking service is included.
 
-Requires Swift 6, iOS 17 or macOS 14 for the supported Apple products. The core model uses Foundation; iOS card rendering stays in a separate target.
+Swift 6 · iOS 17+ · macOS 14+ · no external package dependencies.
 
-## Products
-
-| Product | Responsibility |
-| --- | --- |
-| `AppPromotion` | Catalog decoding, approved targets, schedules and one-card selection |
-| `AppPromotionRemote` | Bounded HTTPS catalog/image reads and short-lived feed snapshots |
-| `AppPromotionUI` | Native card styling and a lazy timeline for actual content changes |
-| `AppPromotionExamples` | Optional first-party preview data and branded artwork; not needed by SDK consumers |
-
-The remote product uses Apple URLSession APIs; the native card and image renderer are iOS-only. Do not import these products into a portable domain target.
-
-Your app owns its Store, navigation, design tokens, consent, reporting, and persistence. The package does not write application records or own an app-wide state container.
-
-## Swift Package Manager
-
-Use the `0.1.0` version with an exact dependency:
+## Add the package
 
 ```swift
 .package(
     url: "https://github.com/axiom-orient/AppPromotion.git",
-    exact: "0.1.0"
+    exact: "0.2.0"
 )
 ```
 
-Add only the products used by your target:
+Link these products in the UI/composition target for the example below:
 
 ```swift
 .product(name: "AppPromotion", package: "AppPromotion"),
@@ -36,56 +21,99 @@ Add only the products used by your target:
 .product(name: "AppPromotionUI", package: "AppPromotion")
 ```
 
-## Read a catalog
+Keep only the Foundation-only `AppPromotion` product in a domain target that needs catalog values. `AppPromotionExamples` is optional branded preview material; it is not required for production.
 
-The URL is deployment configuration supplied by your app. It is not an address returned by an advertisement.
+## Receive and show one card
+
+Choose a catalog you operate or trust. The v3 operator approves the advertised titles, copy and HTTPS destinations. Set its URL and the host app's public ID once:
 
 ```swift
 import Foundation
-import AppPromotion
 import AppPromotionRemote
 
-let host = PromotionAppID(rawValue: "notes")
-let target = try PromotionTarget(
-    id: PromotionAppID(rawValue: "sketch"),
-    title: "Drawing app"
+let promotion = try PromotionConfiguration(
+    catalogURL: URL(string: "https://promotions.example.net/v3/campaigns.json")!,
+    host: "notes"
 )
-let endpoint = try PromotionEndpoint(
-    url: URL(string: "https://promotions.example.net/v2/campaigns.json")!
-)
-let feed = try await PromotionFeedClient(endpoint: endpoint).fetch()
-let rotation = feed.rotation(host: host, targets: [target], language: "en")
-let card = rotation.card(at: Date())
 ```
 
-The hostname above is a reserved documentation example. Replace it with your approved deployed URL. A target without a verified numeric App Store ID has no App Store destination. Do not substitute a guessed product ID or treat a preview as a working install action.
+The example hostname is reserved for documentation. Replace it with your approved deployed URL.
 
-The transport accepts HTTPS without credentials, query parameters, fragments, or redirects. The HTTPS/CDN provider still receives normal connection metadata such as IP addresses. Catalogs are capped at 32 KiB. Snapshots last at most five minutes and never outlive the catalog's own expiry. Fetch errors are returned to the app; no provider fallback, automatic retry, stale disk cache, or background refresh is added.
+Wrap the existing screen container. Insert the optional advertisement only when it exists:
 
-For an optional icon, call `fetchImage` with the selected card's `PromotionAsset`, then pass the verified bytes to `PromotionArtwork.image(data:)` in the iOS UI boundary. Images use the catalog origin and `/v2/assets/<sha256>.png` or `.jpg`, are capped at 96 KiB, and must match their SHA-256. Image download does not authorize continued display of an expired card.
+```swift
+import AppPromotion
+import AppPromotionRemote
+import AppPromotionUI
+import SwiftUI
 
-## Present one native card
+struct HomeScreen: View {
+    let promotion: PromotionConfiguration
+    let showAdInformation: (PromotionCard) -> Void
+    let recordFailure: (any Error) -> Void
 
-Use `PromotionTimeline(rotation:content:)` around the existing list or scroll content, then insert an actual row only when its optional card exists. Do not put an empty timeline inside a permanent list row: the row could retain its own height.
+    var body: some View {
+        PromotionPlacement(
+            configuration: promotion,
+            about: showAdInformation,
+            onFailure: recordFailure
+        ) { advertisement in
+            ScrollView {
+                VStack(spacing: 16) {
+                    Text("Your existing screen content")
+                    if let advertisement { advertisement }
+                }
+                .padding()
+            }
+        }
+    }
+}
+```
 
-`PromotionCardView` takes the app's semantic colors, fonts, inset, and corner radius. Its preview presentation has no fake install button. Use its advertisement presentation only after supplying a verified local App Store destination and explicit open and ad-information/reporting callbacks. Those callbacks receive the exact displayed card, not a card selected again at tap time.
+The callbacks connect to the app's existing ad information/reporting flow and internal diagnostics. Provide useful ad information and a working report action before enabling production ads. The information flow must explain that selection uses the host app, catalog order and schedule, without personal targeting.
 
-Keep writing, review and saving controls in their existing positions. Hide the placement when its screen is covered or inactive. A catalog fetch or card rotation must not cancel, resubmit, or clear the person's work. UI scheduling is not a guarantee that the operating system runs your app while it is suspended.
+`PromotionPlacement` owns transient ad retrieval, the five-minute feed lease and optional icon loading. It shows only one eligible card, excludes the host app, rotates distinct targets once per UTC minute and opens the exact displayed HTTPS destination with the system `openURL` action. A failed open is reported through `onFailure`.
 
-## Server format and hosting
+No loading placeholder, empty ad row, retry button or additional ad screen is created. The wrapper remains the same when a card appears or disappears. Wrap the whole `List` or `ScrollView`; putting the placement inside a permanent row can preserve the row's height even when no ad exists.
 
-- [Wire contract](docs/CATALOG.md) and [JSON Schema](Schemas/catalog-v2.schema.json)
-- [Cloudflare and Firebase static hosting](docs/HOSTING.md)
-- [Disabled catalog](Hosting/public/v2/campaigns.json) and [future-dated example](Hosting/public/v2/catalog.example.json)
+Use `isEnabled: false` while the host screen is covered, editing, generating or saving. Inactive scenes do not display or fetch ads. A successful live feed is renewed when its lease expires; a failed fetch is reported and is not automatically retried. Re-enabling the placement, changing its configuration or re-entering an active scene starts a new request. Expired catalogs remain hidden until another such request. No disk cache or background refresh is added.
 
-Cloudflare Workers Static Assets is the primary template. Firebase Hosting serves the same files with a different deployment configuration. Neither requires an SDK in the consuming app. The templates create no account, project, paid resource, domain, or credentials on their own.
+The default `.standard` style uses system colors and fonts. Pass your `PromotionCardView.Style` to keep the card consistent with your design system. Korean language identifiers such as `ko-KR` and `ko_KR` select Korean copy; other catalog languages use English. Card controls also support Japanese.
+
+## Change ads on the server
+
+Edit the v3 JSON to change titles, descriptions, HTTPS destinations, schedules, order or the global `enabled` switch. This does not require a client release while the schema remains compatible. Review every new destination and creative before publishing it.
+
+- [Catalog contract and v2 compatibility](docs/CATALOG.md)
+- [v3 schema](Schemas/catalog-v3.schema.json), [disabled catalog](Hosting/public/v3/campaigns.json), [future-dated example](Hosting/public/v3/catalog.example.json)
+- [Cloudflare primary template and Firebase alternative](docs/HOSTING.md)
+- [Research and adoption decisions](docs/RESEARCH.md)
+- [Renewal changes and verification scope](docs/RENEWAL.md)
+
+Cloudflare Workers Static Assets can serve the JSON and optional images without a Worker script or database. Firebase Hosting can serve the same files. Neither requires a provider SDK in the app. These are source templates; no account, billing, domain, DNS or deployment is configured by adding this package.
+
+## Existing v2 integrations
+
+The existing `PromotionTarget`, `PromotionFeedClient`, `PromotionTimeline`, `PromotionCardView` and `PromotionCard.read` APIs remain available. The v2 path still takes an app-owned registry; remote title and destination fields never override it. A locally approved `PromotionDestination` can now supply a web link as well as the existing numeric App Store ID.
+
+The new `PromotionPlacement` explicitly requires v3. A v2 response is reported as an unsupported schema; it is never silently treated as v3 or merged with local approvals. Keep `/v2/campaigns.json` in place for existing clients and use a separate `/v3/campaigns.json` URL when opting in.
+
+For custom state ownership, use `PromotionFeedClient.fetch()` and `feed.rotation(host:language:)` for v3, or `feed.rotation(host:targets:language:)` for v2. `PromotionTimeline` and `PromotionCardView` remain presentation-only alternatives to the ready-made connection.
+
+## Boundaries and privacy
+
+Catalog and image requests contain no app/user IDs, locale, authentication, cookies, records, receipts or telemetry. The selected HTTPS/CDN origin still receives normal connection metadata, including IP addresses. The destination website or store has its own privacy behavior after the person opens it; the SDK does not guarantee that site's analytics policy.
+
+Transport rejects redirects and caps catalogs at 32 KiB. Optional icons use the catalog origin and the existing `/v2/assets/<sha256>.png` or `.jpg` path, at most 96 KiB. Bytes must match the digest and decode as one static PNG/JPEG frame up to 256×256 pixels. Invalid artwork is reported and omitted; the same valid text card remains. A verified image never extends an expired card's lease.
+
+Your app owns its Store, navigation, consent, reporting, design tokens and persistence. The package cannot alter application data, IDs, receipts, generation recovery or automatic sharing.
 
 ## License and status
 
-Library code is MIT; see [LICENSE](LICENSE). Optional app icons and brand names are excluded from the code license; see [NOTICE](NOTICE.md).
+Library code is MIT; see [LICENSE](LICENSE). Optional app icons and brand names are excluded; see [NOTICE](NOTICE.md).
 
-This source was prepared without running new package/app builds, tests, type checks, or live endpoint requests. Source review, package publication, a successful runtime fetch, and app submission readiness are separate results. No Cloudflare/Firebase deployment is included in the repository publication.
+The 0.2.0 source renewal is a prerelease. Package compilation and the two approved new-risk checks passed; their scope is recorded in [RENEWAL](docs/RENEWAL.md). No live catalog request, three-app build/test or hosting deployment is part of this renewal.
 
 ### 운영 요약
 
-앱이 승인한 게시 URL과 광고 대상만 사용합니다. 서버는 JSON과 선택 이미지만 제공합니다. 자기 앱·미승인 대상·기간이 끝난 광고는 표시하지 않습니다. 유효 대상이 여러 개면 한 장씩 순환하고, 없으면 광고 행과 여백도 만들지 않습니다. 계정·사용자 식별자·기록·receipt·자동 공유 데이터는 광고 모듈로 보내지 않습니다. 운영 서버 게시와 실제 상품·신고 연결은 별도 승인된 구성으로 진행합니다.
+v3는 승인한 서버 URL과 현재 앱 ID만 설정합니다. 광고명·문구·목적지·일정은 JSON에서 바꾸고, 앱에는 카드 한 장만 표시합니다. 자기 앱과 만료 광고는 제외하며 광고가 없으면 행과 여백도 만들지 않습니다. 기존 v2 로컬 승인과 앱 데이터·ID·receipt·자동 공유는 그대로 보존합니다.

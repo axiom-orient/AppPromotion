@@ -1,6 +1,6 @@
 import Foundation
 
-/// Immutable v2 snapshot. Selection owns dates; adapters own retrieval and freshness.
+/// Immutable catalog. Selection owns dates; adapters own retrieval and freshness.
 public struct PromotionCatalog: Sendable {
     public enum ReadError: Error, Equatable, Sendable {
         case sizeLimit, malformed, unsupportedSchema, invalidRevision, campaignLimit, duplicateCampaignID
@@ -8,6 +8,7 @@ public struct PromotionCatalog: Sendable {
 
     public let revision: String
     public let validUntil: Date
+    public let schemaVersion: Int
     private let enabled: Bool
     private let campaigns: [Campaign]
 
@@ -18,13 +19,14 @@ public struct PromotionCatalog: Sendable {
         let payload: Payload
         do { payload = try decoder.decode(Payload.self, from: data) }
         catch { throw ReadError.malformed }
-        guard payload.schemaVersion == 2 else { throw ReadError.unsupportedSchema }
+        guard [2, 3].contains(payload.schemaVersion) else { throw ReadError.unsupportedSchema }
         guard Self.validRevision(payload.revision) else { throw ReadError.invalidRevision }
         guard payload.campaigns.count <= 12 else { throw ReadError.campaignLimit }
         guard Set(payload.campaigns.map(\.id)).count == payload.campaigns.count else {
             throw ReadError.duplicateCampaignID
         }
         revision = payload.revision; enabled = payload.enabled; validUntil = payload.validUntil
+        schemaVersion = payload.schemaVersion
         campaigns = payload.campaigns.filter {
             PromotionAppID.valid($0.id) && PromotionAppID.valid($0.host) && PromotionAppID.valid($0.target)
                 && $0.startsAt < $0.endsAt && Self.validCopy($0.description.ko) && Self.validCopy($0.description.en)
@@ -35,17 +37,41 @@ public struct PromotionCatalog: Sendable {
     public func rotation(host: PromotionAppID, targets: [PromotionTarget], language: String,
                          notAfter: Date? = nil, notBefore: Date? = nil) -> PromotionRotation {
         let uniqueRegistry = Set(targets.map(\.id)).count == targets.count
-        let validBounds = (notAfter?.timeIntervalSince1970.isFinite ?? true)
-            && (notBefore?.timeIntervalSince1970.isFinite ?? true)
         let entries = campaigns.compactMap { campaign -> PromotionRotation.Entry? in
             guard campaign.host == host.rawValue, campaign.target != host.rawValue,
                   let target = targets.first(where: { $0.id.rawValue == campaign.target }) else { return nil }
             return .init(card: PromotionCard(id: campaign.id, target: target.id, title: target.title,
-                description: language == "ko" ? campaign.description.ko : campaign.description.en,
-                appStoreURL: target.appStoreURL, icon: campaign.icon),
+                description: campaign.description.text(language: language),
+                destination: target.destination, icon: campaign.icon),
                 startsAt: campaign.startsAt, endsAt: campaign.endsAt)
         }
-        return PromotionRotation(enabled: enabled && uniqueRegistry && validBounds && PromotionAppID.valid(host.rawValue),
+        return makeRotation(host: host, permitted: schemaVersion == 2 && uniqueRegistry,
+                            entries: entries, notAfter: notAfter, notBefore: notBefore)
+    }
+
+    /// Explicitly trust the selected v3 catalog operator to approve titles and destinations.
+    /// This path never falls back to the v2 local registry.
+    public func rotation(host: PromotionAppID, language: String,
+                         notAfter: Date? = nil, notBefore: Date? = nil) -> PromotionRotation {
+        let entries = campaigns.compactMap { campaign -> PromotionRotation.Entry? in
+            guard campaign.host == host.rawValue, campaign.target != host.rawValue,
+                  let title = campaign.title, Self.validCopy(title.ko), Self.validCopy(title.en),
+                  let raw = campaign.destination, let url = URL(string: raw),
+                  let destination = try? PromotionDestination(url: url) else { return nil }
+            return .init(card: PromotionCard(id: campaign.id, target: .init(rawValue: campaign.target),
+                title: title.text(language: language), description: campaign.description.text(language: language),
+                destination: destination, icon: campaign.icon),
+                startsAt: campaign.startsAt, endsAt: campaign.endsAt)
+        }
+        return makeRotation(host: host, permitted: schemaVersion == 3, entries: entries,
+                            notAfter: notAfter, notBefore: notBefore)
+    }
+
+    private func makeRotation(host: PromotionAppID, permitted: Bool, entries: [PromotionRotation.Entry],
+                              notAfter: Date?, notBefore: Date?) -> PromotionRotation {
+        let validBounds = (notAfter?.timeIntervalSince1970.isFinite ?? true)
+            && (notBefore?.timeIntervalSince1970.isFinite ?? true)
+        return PromotionRotation(enabled: enabled && permitted && validBounds && PromotionAppID.valid(host.rawValue),
             validFrom: notBefore, validUntil: min(validUntil, notAfter ?? validUntil), entries: entries)
     }
 
@@ -71,7 +97,12 @@ public struct PromotionCatalog: Sendable {
     }
 
     private struct Campaign: Decodable, Sendable {
-        struct Copy: Decodable, Sendable { let ko: String; let en: String }
+        struct Copy: Decodable, Sendable {
+            let ko: String; let en: String
+            func text(language: String) -> String {
+                Locale(identifier: language).language.languageCode?.identifier == "ko" ? ko : en
+            }
+        }
         let id: String
         let host: String
         let target: String
@@ -79,9 +110,11 @@ public struct PromotionCatalog: Sendable {
         let endsAt: Date
         let description: Copy
         let icon: PromotionAsset?
+        let title: Copy?
+        let destination: String?
 
         private enum CodingKeys: String, CodingKey {
-            case id, host, target, startsAt, endsAt, description, icon
+            case id, host, target, startsAt, endsAt, description, icon, title, destination
         }
 
         init(from decoder: any Decoder) throws {
@@ -94,6 +127,8 @@ public struct PromotionCatalog: Sendable {
             description = try values.decode(Copy.self, forKey: .description)
             // A bad optional image reference must not remove a valid text advertisement.
             icon = try? values.decodeIfPresent(PromotionAsset.self, forKey: .icon)
+            title = try? values.decodeIfPresent(Copy.self, forKey: .title)
+            destination = try? values.decodeIfPresent(String.self, forKey: .destination)
         }
     }
 }

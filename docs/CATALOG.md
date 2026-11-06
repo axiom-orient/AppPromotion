@@ -1,37 +1,44 @@
-# Catalog v2
+# Catalog contracts
 
-The catalog is public, static content. Client configuration chooses the exact catalog URL, host app ID, and approved target registry. A catalog cannot add a new approved target, choose a user account, supply a destination URL, or enable tracking.
+Catalogs are public static content, not remote code or UI definitions. The app chooses an exact HTTPS catalog URL and host app ID. Two explicit trust modes share the same scheduling and transport rules:
 
-The [JSON Schema](../Schemas/catalog-v2.schema.json) describes the wire shape. Runtime validation also enforces byte limits, Swift `Character` copy limits, safe content-addressed image paths, date ordering, local target approval, and active-campaign conflicts. Passing a JSON Schema check alone is not a runtime or advertising-policy approval.
+| Mode | Approval owner | Selection API |
+| --- | --- | --- |
+| v3 | The trusted catalog operator approves localized titles and HTTPS destinations | `rotation(host:language:)` and `PromotionPlacement` |
+| v2 | The app owns a local `PromotionTarget` registry | `rotation(host:targets:language:)` |
 
-## Envelope
+The modes never merge or fall back to each other. Choosing v3 delegates advertiser and destination review to the operator of the selected catalog. This is not independent verification of arbitrary advertisers. Keep existing v2 URLs and local registries when that approval boundary is required.
+
+## Common envelope
 
 | Field | Meaning |
 | --- | --- |
-| `schemaVersion` | Integer `2`; other schema versions are not silently reinterpreted |
-| `revision` | 1–64 lowercase ASCII letters, digits or hyphens; an operator revision, not a monotonic user counter |
+| `schemaVersion` | Integer `2` or `3`; selection must use the matching API |
+| `revision` | 1–64 lowercase ASCII letters, digits or hyphens; not a monotonic user counter |
 | `enabled` | Global catalog switch |
-| `validUntil` | UTC ISO 8601 expiry |
-| `campaigns` | At most 12 campaigns; campaign IDs must be unique |
+| `validUntil` | Catalog expiry |
+| `campaigns` | At most 12 campaigns, with unique campaign IDs |
 
-Use whole-second UTC timestamps such as `2030-01-01T00:00:00Z`. End instants are exclusive. The disabled template is intentionally valid for a long period but contains no campaigns.
+Publish whole-second UTC timestamps such as `2030-01-01T00:00:00Z`. Runtime uses Foundation ISO 8601 decoding; the schemas describe the canonical producer format. End instants are exclusive. A catalog is at most 32 KiB.
 
-## Campaign
+## v3 campaign
 
 | Field | Meaning |
 | --- | --- |
 | `id` | Public campaign ID; 1–128 characters from `[a-z0-9._-]` |
-| `host` | App ID that may display the campaign; same ID syntax |
-| `target` | App ID being promoted; same ID syntax, distinct from the host |
-| `startsAt`, `endsAt` | Campaign interval, with `startsAt < endsAt` |
-| `description.ko`, `description.en` | Plain copy, each 1–60 Swift `Character` values; no whitespace-only text, controls, formatting controls, angle-bracket markup or line breaks |
+| `host` | App ID allowed to display this campaign; same ID syntax |
+| `target` | Promoted app or partner ID; same syntax and distinct from the host |
+| `startsAt`, `endsAt` | Interval with `startsAt < endsAt` |
+| `title.ko`, `title.en` | Localized advertiser/product name |
+| `description.ko`, `description.en` | One short, useful description |
+| `destination` | Publisher-approved absolute HTTPS URL |
 | `icon` | Optional content-addressed image reference |
 
-App titles and verified App Store IDs come from the client's `PromotionTarget` registry. A campaign ID is not a user, device, original-record, operation, or receipt ID. Do not put personal data in catalog IDs or URLs.
+Each title and description must contain 1–60 Swift `Character` values and nonblank plain text. Controls, format controls, angle brackets and line breaks are rejected. The schemas cannot express the Swift grapheme limit or all runtime relationships.
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "revision": "example-01",
   "enabled": true,
   "validUntil": "2030-02-01T00:00:00Z",
@@ -42,50 +49,63 @@ App titles and verified App Store IDs come from the client's `PromotionTarget` r
       "target": "sketch",
       "startsAt": "2030-01-01T00:00:00Z",
       "endsAt": "2030-01-15T00:00:00Z",
+      "title": {"ko": "그림 앱", "en": "Drawing app"},
       "description": {
-        "ko": "아이디어를 한 장의 그림으로 남겨요.",
+        "ko": "아이디어를 그림으로 남겨요.",
         "en": "Keep an idea as a sketch."
-      }
+      },
+      "destination": "https://example.com/sketch"
     }
   ]
 }
 ```
 
-This fixture is not an actual app advertisement and has no destination or image. Its date must not be mistaken for an active production schedule.
+This is a future-dated format example with a reserved domain, not a live advertisement. Replace its dates, copy and destination with reviewed material before publication. [v3 schema](../Schemas/catalog-v3.schema.json)
+
+### Destinations
+
+`PromotionDestination` validates an absolute HTTPS URL up to 2048 UTF-8 bytes. It rejects credentials, non-443 explicit ports, control/format characters and backslashes, including percent-decoded forms. Custom schemes, JavaScript, relative URLs and HTTP are not accepted. The scheme and host are normalized to lowercase.
+
+Static query parameters and fragments are allowed for ordinary landing pages. Do not place user/device data or secrets in them. Only the exact `apps.apple.com` host receives App Store accessibility wording; other destinations use web wording. A Universal Link may be handled by the destination app through normal system behavior. The SDK never probes an installation or invents a product ID.
+
+The transport's stricter catalog URL rules are separate: catalog endpoints permit no credentials, query, fragment or redirects. Destination sites can have their own redirects and analytics after an explicit tap; their behavior is the operator's responsibility.
+
+## v2 compatibility
+
+v2 uses the common envelope and campaign fields except that `title` and `destination` come from the local `PromotionTarget` registry. Adding remote fields to v2 cannot replace local approval. `PromotionTarget(id:title:appStoreID:)` retains the numeric-ID contract; the added `destination:` initializer accepts a validated `PromotionDestination` for a locally approved web link. A target with no destination is a noninteractive preview, not permission for a fake action.
+
+Duplicate local target IDs disable v2 rotation. Invalid IDs, blank/oversized local titles and malformed numeric product IDs are configuration errors. The registry selection overload produces no v3 card; the v3 overload produces no v2 card. `PromotionPlacement` reports a v2 response as `unsupportedSchema` rather than treating it as a legitimate empty v3 feed. [v2 schema](../Schemas/catalog-v2.schema.json)
 
 ## Optional icon
 
-An icon object contains the required reference fields below; the consuming transport also checks the same-origin URL and downloaded digest.
-Malformed optional icon metadata is discarded while a valid text campaign remains eligible.
+Both versions intentionally retain the same immutable asset contract:
 
 ```text
 path:   /v2/assets/<64 lowercase hexadecimal SHA-256>.png
 sha256: <the same 64-character digest>
 ```
 
-JPEG uses `.jpg` instead. Publish the file under that path after computing its digest. Do not modify bytes without changing the digest and path. The download cap is 96 KiB. The iOS artwork decoder accepts one PNG/JPEG frame, with each dimension from 1 to 256 pixels. Do not use tracking pixels, third-party image hosts, data URLs, redirects, credentials, or query strings. Files should be small static PNG/JPEG images suitable for the card; strip unnecessary metadata before publication.
+JPEG uses `.jpg`. Keep bytes under 96 KiB, with one static PNG/JPEG frame and dimensions 1–256 pixels per side. Strip unnecessary metadata. The transport uses the catalog origin, rejects redirects and verifies the downloaded SHA-256 before the UI decoder reads the bytes.
 
-## Local target registry
+Malformed optional references are omitted while a valid text campaign remains eligible. In the ready-made placement, a download/decode failure is reported through `onFailure`; only that icon is omitted. Publish changed image bytes under a changed digest/path. Keep older assets available while unexpired clients may use them. No fallback advertiser or image is substituted.
 
-The app supplies each target's `PromotionAppID`, localized title and optional verified numeric App Store ID. Duplicate target IDs disable the rotation. Invalid IDs, blank/oversized titles and malformed numeric product IDs are configuration errors. The catalog does not override the title or destination.
+## Selection and lease
 
-Omitting an App Store ID is useful for a noninteractive preview. It is not permission to show an install button without a destination. Reporting is still an app-owned action; the catalog must not invent or replace its endpoint.
+1. Disabled or expired catalogs provide no card.
+2. A campaign must match the host. The host is always excluded from its own targets. v2 additionally requires local target approval; v3 requires valid remote title and destination.
+3. Active means `startsAt <= now < endsAt`, within catalog and feed lease bounds.
+4. Distinct eligible targets rotate in catalog order, one per UTC minute. One target stays visible; no target means no row.
+5. Simultaneously active campaigns for the same host/target hide that host's card until the conflict ends.
+6. Future starts, campaign ends, catalog expiry and feed expiry can occur between minute boundaries. The next update follows the earliest transition without per-second polling.
 
-## Selection and expiry
+`PromotionFeed` is in-memory only and expires at the earlier of catalog expiry and five minutes after receipt. The ready-made placement receives only in an enabled, active scene and renews a successfully received live lease. Failed requests do not retry automatically. Re-enable, configuration change or active scene re-entry starts a new request. An already expired catalog stops the renewal loop. UI scheduling does not guarantee execution while the OS suspends the app.
 
-1. A disabled or expired catalog supplies no card.
-2. Only the current host and locally approved targets are eligible. The host app is always excluded from its own targets.
-3. A campaign is active when `startsAt <= now < endsAt` and the overall catalog and feed snapshot are still valid.
-4. Multiple distinct eligible targets rotate in catalog order, one per UTC minute. One target stays visible. No target produces no row.
-5. Two simultaneously active campaigns for the same host and target hide that host's card rather than selecting an arbitrary winner.
-6. Future start, campaign end, catalog expiry, and snapshot expiry can occur between minute boundaries. The next update follows the earliest actual transition. No per-second polling is needed.
+Every card keeps its campaign ID, target and destination during interaction. Open and information actions use the displayed immutable card, never another clock-based selection.
 
-Every card retains its campaign ID and target. Its tap action must use that displayed value. Do not select again using the clock when the action runs.
+## Failure and emergency stop
 
-## Failure and rollback
+Malformed envelopes, unsupported versions, duplicate campaign IDs, oversized responses, invalid endpoints and transport failures are errors. Invalid per-campaign copy, schedules or v3 destination metadata make that campaign ineligible. A valid catalog can legitimately have no eligible card. A schema check alone is neither runtime validation nor advertising-policy approval.
 
-Malformed envelopes, unsupported versions, duplicate IDs, oversized responses, invalid endpoints, or transport failures are errors, not a successful empty fetch. The app may omit the placement while retaining the diagnostic internally; it must not change the person's work or retry a generation/save operation.
+For emergency stop, publish `enabled: false` and an empty campaign array. Existing feed leases expire within five minutes, further bounded by catalog expiry. Instant removal on suspended/offline devices is not guaranteed. Roll back only to a compatible, unexpired and still-approved catalog; revisions need not increase.
 
-A valid catalog may legitimately have no eligible card. Invalid per-campaign material cannot grant new approval or a guessed destination. Do not serve a fallback image or another advertiser as if it were the requested result.
-
-For emergency stop, publish an enabled-false catalog with an empty campaign array. Existing snapshots expire within their five-minute lease; do not promise instant removal on suspended/offline devices. Only roll back to a compatible, unexpired and still approved catalog. Revisions do not have to increase, so a deliberate safe rollback remains possible.
+Campaign IDs are public advertising keys, never user, installation, original-record, operation or receipt IDs. Catalog changes must not clear work, resubmit a generation/save or alter automatic sharing.

@@ -13,6 +13,10 @@ public struct PromotionFeed: Sendable {
         catalog.rotation(host: host, targets: targets, language: language,
                          notAfter: expiresAt, notBefore: fetchedAt)
     }
+
+    public func rotation(host: PromotionAppID, language: String) -> PromotionRotation {
+        catalog.rotation(host: host, language: language, notAfter: expiresAt, notBefore: fetchedAt)
+    }
 }
 
 /// Public static hosting works with Cloudflare, Firebase Hosting or another approved HTTPS origin.

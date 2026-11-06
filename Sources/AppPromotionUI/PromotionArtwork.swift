@@ -1,4 +1,4 @@
-#if os(iOS)
+#if canImport(SwiftUI)
 import Foundation
 import ImageIO
 import SwiftUI

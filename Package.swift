@@ -13,8 +13,9 @@ let package = Package(
     targets: [
         .target(name: "AppPromotion"),
         .target(name: "AppPromotionRemote", dependencies: ["AppPromotion"]),
-        .target(name: "AppPromotionUI", dependencies: ["AppPromotion"]),
-        .target(name: "AppPromotionExamples", dependencies: ["AppPromotion"], resources: [.process("Resources")])
+        .target(name: "AppPromotionUI", dependencies: ["AppPromotion", "AppPromotionRemote"]),
+        .target(name: "AppPromotionExamples", dependencies: ["AppPromotion"], resources: [.process("Resources")]),
+        .testTarget(name: "AppPromotionTests", dependencies: ["AppPromotion"])
     ],
     swiftLanguageModes: [.v6]
 )

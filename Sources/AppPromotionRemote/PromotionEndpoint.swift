@@ -3,7 +3,7 @@ import Foundation
 import AppPromotion
 
 /// One public HTTPS resource. It never contains credentials or per-user request parameters.
-public struct PromotionEndpoint: Sendable {
+public struct PromotionEndpoint: Equatable, Sendable {
     public let url: URL
 
     public init(url: URL) throws {

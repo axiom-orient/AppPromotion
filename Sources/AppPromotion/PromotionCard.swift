@@ -4,6 +4,7 @@ import Foundation
 public struct PromotionAppID: RawRepresentable, Hashable, Codable, Sendable {
     public let rawValue: String
     public init(rawValue: String) { self.rawValue = rawValue }
+    public var isValid: Bool { Self.valid(rawValue) }
 
     public init(from decoder: any Decoder) throws {
         let value = try decoder.singleValueContainer()
@@ -34,14 +35,11 @@ public struct PromotionTarget: Equatable, Sendable {
 
     public let id: PromotionAppID
     public let title: String
-    public let appStoreURL: URL?
+    public let destination: PromotionDestination?
+    public var appStoreURL: URL? { destination.flatMap { $0.isAppStore ? $0.url : nil } }
 
     public init(id: PromotionAppID, title: String, appStoreID: String? = nil) throws {
-        guard PromotionAppID.valid(id.rawValue) else { throw ConfigurationError.invalidAppID }
-        guard !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, title.count <= 60,
-              title.rangeOfCharacter(from: .controlCharacters.union(.newlines)) == nil,
-              !title.unicodeScalars.contains(where: { $0.properties.generalCategory == .format })
-        else { throw ConfigurationError.invalidTitle }
+        try Self.validate(id: id, title: title)
         self.id = id
         self.title = title
         if let appStoreID {
@@ -49,10 +47,24 @@ public struct PromotionTarget: Equatable, Sendable {
                   appStoreID.utf8.allSatisfy({ (48...57).contains($0) }),
                   appStoreID.first != "0", let url = URL(string: "https://apps.apple.com/app/id" + appStoreID)
             else { throw ConfigurationError.invalidAppStoreID }
-            appStoreURL = url
+            destination = try PromotionDestination(url: url)
         } else {
-            appStoreURL = nil
+            destination = nil
         }
+    }
+
+    /// Approve a web, Universal Link or App Store destination locally for a v2 catalog.
+    public init(id: PromotionAppID, title: String, destination: PromotionDestination) throws {
+        try Self.validate(id: id, title: title)
+        self.id = id; self.title = title; self.destination = destination
+    }
+
+    private static func validate(id: PromotionAppID, title: String) throws {
+        guard id.isValid else { throw ConfigurationError.invalidAppID }
+        guard !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, title.count <= 60,
+              title.rangeOfCharacter(from: .controlCharacters.union(.newlines)) == nil,
+              !title.unicodeScalars.contains(where: { $0.properties.generalCategory == .format })
+        else { throw ConfigurationError.invalidTitle }
     }
 }
 
@@ -84,7 +96,10 @@ public struct PromotionCard: Equatable, Sendable, Identifiable {
     public let target: PromotionAppID
     public let title: String
     public let description: String
-    public let appStoreURL: URL?
+    public let destination: PromotionDestination?
+    public var destinationURL: URL? { destination?.url }
+    /// Preserved for existing App Store-only consumers; web links are not mislabeled as store links.
+    public var appStoreURL: URL? { destination.flatMap { $0.isAppStore ? $0.url : nil } }
     public let icon: PromotionAsset?
 
     public static func read(_ data: Data, host: PromotionAppID, targets: [PromotionTarget],
