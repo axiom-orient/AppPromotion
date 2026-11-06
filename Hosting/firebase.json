@@ -1,0 +1,22 @@
+{
+  "hosting": {
+    "public": "public",
+    "ignore": ["firebase.json", "_headers", "**/.*", "**/node_modules/**"],
+    "headers": [
+      {
+        "source": "/v2/*.json",
+        "headers": [
+          {"key": "Cache-Control", "value": "no-store"},
+          {"key": "X-Content-Type-Options", "value": "nosniff"}
+        ]
+      },
+      {
+        "source": "/v2/assets/**",
+        "headers": [
+          {"key": "Cache-Control", "value": "public, max-age=31536000, immutable"},
+          {"key": "X-Content-Type-Options", "value": "nosniff"}
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 2,
+  "revision": "example-01",
+  "enabled": true,
+  "validUntil": "2030-02-01T00:00:00Z",
+  "campaigns": [
+    {
+      "id": "notes-to-sketch-01",
+      "host": "notes",
+      "target": "sketch",
+      "startsAt": "2030-01-01T00:00:00Z",
+      "endsAt": "2030-01-15T00:00:00Z",
+      "description": {
+        "ko": "아이디어를 한 장의 그림으로 남겨요.",
+        "en": "Keep an idea as a sketch."
+      }
+    }
+  ]
+}
